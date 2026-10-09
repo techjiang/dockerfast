@@ -1,0 +1,22 @@
+services:
+  dockerfast:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: dockerfast:latest
+    container_name: dockerfast
+    restart: unless-stopped
+    command: ["-config", "/etc/dockerfast/config.json"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./config.example.json:/etc/dockerfast/config.json:ro
+      - dockerfast-data:/data
+    environment:
+      DOCKERFAST_LISTEN: ":5000"
+      DOCKERFAST_DATA_DIR: "/data"
+      DOCKERFAST_LOG_LEVEL: "info"
+
+volumes:
+  dockerfast-data:

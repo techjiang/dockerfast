@@ -1,0 +1,18 @@
+# Build output
+/bin/
+/dockerfast
+/dockerfast-*
+
+# Runtime data / cache
+/data/
+*.log
+
+# Local config with credentials
+/config.json
+/config.local.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

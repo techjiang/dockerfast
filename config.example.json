@@ -1,0 +1,80 @@
+{
+  "listen": ":5000",
+  "dataDir": "./data",
+  "logLevel": "info",
+  "accessLog": true,
+  "allowPush": false,
+  "maxManifestSize": 8388608,
+  "upstreamTimeout": "5m",
+  "cache": {
+    "maxSizeBytes": 21474836480,
+    "blobTTL": "720h",
+    "manifestTTL": "24h",
+    "cleanupInterval": "30m"
+  },
+  "upstreams": [
+    {
+      "name": "docker.io",
+      "hosts": ["docker.io", "registry-1.docker.io", "index.docker.io"],
+      "endpoint": "https://registry-1.docker.io",
+      "default": true
+    },
+    {
+      "name": "ghcr.io",
+      "hosts": ["ghcr.io"],
+      "endpoint": "https://ghcr.io"
+    },
+    {
+      "name": "gcr.io",
+      "hosts": ["gcr.io"],
+      "endpoint": "https://gcr.io"
+    },
+    {
+      "name": "k8s.gcr.io",
+      "hosts": ["k8s.gcr.io"],
+      "endpoint": "https://k8s.gcr.io"
+    },
+    {
+      "name": "registry.k8s.io",
+      "hosts": ["registry.k8s.io"],
+      "endpoint": "https://registry.k8s.io"
+    },
+    {
+      "name": "quay.io",
+      "hosts": ["quay.io"],
+      "endpoint": "https://quay.io"
+    },
+    {
+      "name": "mcr.microsoft.com",
+      "hosts": ["mcr.microsoft.com"],
+      "endpoint": "https://mcr.microsoft.com"
+    },
+    {
+      "name": "public.ecr.aws",
+      "hosts": ["public.ecr.aws"],
+      "endpoint": "https://public.ecr.aws"
+    },
+    {
+      "name": "nvcr.io",
+      "hosts": ["nvcr.io"],
+      "endpoint": "https://nvcr.io"
+    },
+    {
+      "name": "registry.gitlab.com",
+      "hosts": ["registry.gitlab.com"],
+      "endpoint": "https://registry.gitlab.com"
+    },
+    {
+      "name": "docker.elastic.co",
+      "hosts": ["docker.elastic.co"],
+      "endpoint": "https://docker.elastic.co"
+    },
+    {
+      "name": "registry.example.com",
+      "hosts": ["registry.example.com"],
+      "endpoint": "https://registry.example.com",
+      "username": "your-user",
+      "password": "your-token"
+    }
+  ]
+}
