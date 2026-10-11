@@ -81,6 +81,22 @@ type Cache struct {
 	CleanupInterval Duration `json:"cleanupInterval"`
 }
 
+// Retry configures retry behaviour for transient upstream failures.
+type Retry struct {
+	// Attempts is the total number of attempts (1 disables retrying).
+	Attempts       int      `json:"attempts"`
+	InitialBackoff Duration `json:"initialBackoff"`
+	MaxBackoff     Duration `json:"maxBackoff"`
+}
+
+// Auth optionally protects the proxy with HTTP Basic authentication. This is
+// useful when the cache is exposed to an untrusted network.
+type Auth struct {
+	Enabled  bool   `json:"enabled"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // Config is the top-level configuration.
 type Config struct {
 	Listen          string     `json:"listen"`
@@ -91,6 +107,8 @@ type Config struct {
 	MaxManifestSize int64      `json:"maxManifestSize"`
 	UpstreamTimeout Duration   `json:"upstreamTimeout"`
 	Cache           Cache      `json:"cache"`
+	Retry           Retry      `json:"retry"`
+	Auth            Auth       `json:"auth"`
 	Upstreams       []Upstream `json:"upstreams"`
 }
 
@@ -109,6 +127,11 @@ func Default() *Config {
 			BlobTTL:         Duration(720 * time.Hour),
 			ManifestTTL:     Duration(24 * time.Hour),
 			CleanupInterval: Duration(30 * time.Minute),
+		},
+		Retry: Retry{
+			Attempts:       3,
+			InitialBackoff: Duration(200 * time.Millisecond),
+			MaxBackoff:     Duration(2 * time.Second),
 		},
 		Upstreams: DefaultUpstreams(),
 	}
@@ -179,6 +202,18 @@ func (c *Config) applyEnv() {
 	if v, ok := envDuration("DOCKERFAST_MANIFEST_TTL"); ok {
 		c.Cache.ManifestTTL = Duration(v)
 	}
+	if v, ok := envInt("DOCKERFAST_RETRY_ATTEMPTS"); ok {
+		c.Retry.Attempts = int(v)
+	}
+	if v, ok := envBool("DOCKERFAST_AUTH_ENABLED"); ok {
+		c.Auth.Enabled = v
+	}
+	if v := os.Getenv("DOCKERFAST_AUTH_USERNAME"); v != "" {
+		c.Auth.Username = v
+	}
+	if v := os.Getenv("DOCKERFAST_AUTH_PASSWORD"); v != "" {
+		c.Auth.Password = v
+	}
 }
 
 // Validate checks the configuration for obvious mistakes.
@@ -191,6 +226,23 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxManifestSize <= 0 {
 		return fmt.Errorf("config: maxManifestSize must be positive")
+	}
+	if c.Retry.Attempts < 1 {
+		c.Retry.Attempts = 1
+	}
+	if c.Retry.InitialBackoff.Duration() <= 0 {
+		c.Retry.InitialBackoff = Duration(200 * time.Millisecond)
+	}
+	if c.Retry.MaxBackoff.Duration() < c.Retry.InitialBackoff.Duration() {
+		c.Retry.MaxBackoff = c.Retry.InitialBackoff
+	}
+	if c.Auth.Enabled {
+		if c.Auth.Username == "" {
+			return fmt.Errorf("config: auth.username must be set when auth is enabled")
+		}
+		if c.Auth.Password == "" {
+			return fmt.Errorf("config: auth.password must be set when auth is enabled")
+		}
 	}
 	defaults := 0
 	seen := map[string]bool{}

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"time"
 )
@@ -39,6 +40,8 @@ func (s *statusRecorder) Flush() {
 func (r *Registry) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		start := time.Now()
+		r.metrics.IncInFlight()
+		defer r.metrics.DecInFlight()
 		rec := &statusRecorder{ResponseWriter: w}
 		next.ServeHTTP(rec, req)
 		if rec.status == 0 {
@@ -53,9 +56,35 @@ func (r *Registry) withLogging(next http.Handler) http.Handler {
 				"path", req.URL.Path,
 				"status", rec.status,
 				"bytes", rec.bytes,
+				"cache", rec.Header().Get(cacheStatusHeader),
 				"duration", time.Since(start).Round(time.Millisecond).String(),
 				"remote", req.RemoteAddr,
 			)
 		}
+	})
+}
+
+// withAuth optionally protects the endpoints with HTTP Basic authentication.
+// /healthz stays open so orchestrators can probe liveness.
+func (r *Registry) withAuth(next http.Handler) http.Handler {
+	if !r.cfg.Auth.Enabled {
+		return next
+	}
+	user := r.cfg.Auth.Username
+	pass := r.cfg.Auth.Password
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/healthz" {
+			next.ServeHTTP(w, req)
+			return
+		}
+		u, p, ok := req.BasicAuth()
+		if !ok ||
+			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="dockerfast"`)
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+			return
+		}
+		next.ServeHTTP(w, req)
 	})
 }

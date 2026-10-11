@@ -51,6 +51,8 @@ type Registry struct {
 	byHost    map[string]*config.Upstream
 	def       *config.Upstream
 
+	version string
+
 	flights flightGroup
 }
 
@@ -66,6 +68,7 @@ func New(cfg *config.Config, c *cache.Cache, log *slog.Logger) (*Registry, error
 		metrics: NewMetrics(),
 		byHost:  make(map[string]*config.Upstream),
 		flights: flightGroup{},
+		version: "dev",
 	}
 
 	for i := range cfg.Upstreams {
@@ -106,7 +109,10 @@ func New(cfg *config.Config, c *cache.Cache, log *slog.Logger) (*Registry, error
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
-	tr := newAuthTransport(base, creds)
+	retrying := newRetryTransport(base, cfg.Retry.Attempts, cfg.Retry.InitialBackoff.Duration(), cfg.Retry.MaxBackoff.Duration())
+	retrying.onRetry = r.metrics.IncRetries
+
+	tr := newAuthTransport(retrying, creds)
 	r.client = &http.Client{
 		Transport: tr,
 		Timeout:   cfg.UpstreamTimeout.Duration(),
@@ -120,19 +126,27 @@ func New(cfg *config.Config, c *cache.Cache, log *slog.Logger) (*Registry, error
 	return r, nil
 }
 
+// SetVersion records the build version for reporting in /status.
+func (r *Registry) SetVersion(v string) {
+	if v != "" {
+		r.version = v
+	}
+}
+
 // Metrics exposes the registry metrics collector.
 func (r *Registry) Metrics() *Metrics { return r.metrics }
 
 // Handler returns the HTTP handler serving the registry API plus operational
-// endpoints (/healthz, /metrics, /).
+// endpoints (/healthz, /metrics, /status, /).
 func (r *Registry) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", r.handleHealth)
 	mux.HandleFunc("/metrics", r.handleMetrics)
+	mux.HandleFunc("/status", r.handleStatus)
 	mux.HandleFunc("/v2/", r.handleV2)
 	mux.HandleFunc("/v2", r.handleV2)
 	mux.HandleFunc("/", r.handleRoot)
-	return r.withLogging(mux)
+	return r.withLogging(r.withAuth(mux))
 }
 
 func (r *Registry) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -145,29 +159,63 @@ func (r *Registry) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	r.metrics.WritePrometheus(w, r.cache)
 }
 
+// statusResponse is the machine-readable service status.
+type statusResponse struct {
+	Version       string           `json:"version"`
+	UptimeSeconds int64            `json:"uptimeSeconds"`
+	Cache         statusCache      `json:"cache"`
+	Upstreams     []statusUpstream `json:"upstreams"`
+	Metrics       map[string]int64 `json:"metrics"`
+}
+
+type statusCache struct {
+	Bytes    int64 `json:"bytes"`
+	MaxBytes int64 `json:"maxBytes"`
+	Files    int   `json:"files"`
+}
+
+type statusUpstream struct {
+	Name     string `json:"name"`
+	Endpoint string `json:"endpoint"`
+	Default  bool   `json:"default"`
+}
+
+func (r *Registry) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	resp := statusResponse{
+		Version:       r.version,
+		UptimeSeconds: r.metrics.UptimeSeconds(),
+		Cache: statusCache{
+			Bytes:    r.cache.TotalBytes(),
+			MaxBytes: r.cache.MaxBytes(),
+			Files:    r.cache.FileCount(),
+		},
+		Metrics: r.metrics.Snapshot(),
+	}
+	for _, u := range r.upstreams {
+		resp.Upstreams = append(resp.Upstreams, statusUpstream{Name: u.Name, Endpoint: u.Endpoint, Default: u.Default})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(resp)
+}
+
+// handleRoot serves a small self-contained status dashboard.
 func (r *Registry) handleRoot(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Path != "/" {
 		writeError(w, http.StatusNotFound, "NAME_UNKNOWN", "not found")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	info := map[string]any{
-		"service": "dockerfast",
-		"version": "1",
-		"endpoints": []string{
-			"/v2/ (registry API)",
-			"/healthz",
-			"/metrics",
-		},
-	}
-	_ = json.NewEncoder(w).Encode(info)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, dashboardHTML)
 }
 
 func (r *Registry) handleV2(w http.ResponseWriter, req *http.Request) {
 	r.metrics.IncRequests()
+	w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
 	path := req.URL.Path
 	if path == "/v2" || path == "/v2/" {
-		w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "{}")
@@ -286,6 +334,8 @@ var hopHeaders = map[string]bool{
 }
 
 func (r *Registry) passthrough(w http.ResponseWriter, req *http.Request, up *config.Upstream, repo, suffix string) {
+	r.metrics.IncBypass()
+	setCacheStatus(w, cacheBypass)
 	target := up.Endpoint + "/v2/" + repo + suffix
 	if req.URL.RawQuery != "" {
 		target += "?" + req.URL.RawQuery
@@ -354,6 +404,20 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(registryError{Errors: []registryErrorItem{{Code: code, Message: message}}})
+}
+
+// cacheStatusHeader reports whether a response was served from cache.
+const cacheStatusHeader = "X-DockerFast-Cache"
+
+// Cache status values.
+const (
+	cacheHit    = "HIT"
+	cacheMiss   = "MISS"
+	cacheBypass = "BYPASS"
+)
+
+func setCacheStatus(w http.ResponseWriter, status string) {
+	w.Header().Set(cacheStatusHeader, status)
 }
 
 func copyHeaders(dst, src http.Header) {

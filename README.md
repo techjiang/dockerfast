@@ -16,7 +16,10 @@ DockerFast 是一个用 Go 编写的 Docker 镜像拉取加速代理（Registry 
 - 容量治理：可配置最大容量，超出后按 LRU 淘汰；支持 TTL 过期清理
 - 并发去重：相同的层并发拉取只会回源一次，其余请求等待后直接读缓存
 - 流式下发：未命中时一边回源一边写缓存并同时下发给客户端，首字节延迟低
-- 可观测：访问日志、`/healthz` 健康检查、Prometheus 格式的 `/metrics`
+- 弹性重试：上游出现网络错误或 429/5xx 时按指数退避自动重试（可配置次数与退避区间）
+- 可观测：访问日志、`/healthz` 健康检查、Prometheus 格式的 `/metrics`、内置 `/status` 与状态面板
+- 缓存标识：manifest/blob 响应带 `X-DockerFast-Cache: HIT|MISS|BYPASS` 头，便于排查
+- 可选鉴权：支持 HTTP Basic 认证保护代理，避免缓存被滥用
 - 零第三方依赖：仅使用 Go 标准库
 
 ## 快速开始
@@ -107,6 +110,11 @@ DockerFast 会识别路径第一段中的主机名（`ghcr.io`、`gcr.io`、`reg
 | `cache.blobTTL` | blob 过期时间，`0` 表示不过期 | `720h` |
 | `cache.manifestTTL` | manifest 过期时间，`0` 表示不过期 | `24h` |
 | `cache.cleanupInterval` | 清理任务执行间隔 | `30m` |
+| `retry.attempts` | 上游失败重试次数（1 表示不重试） | `3` |
+| `retry.initialBackoff` | 首次重试退避 | `200ms` |
+| `retry.maxBackoff` | 退避上限 | `2s` |
+| `auth.enabled` | 是否开启代理访问 Basic 认证 | `false` |
+| `auth.username` / `password` | 代理访问凭据 | 空 |
 | `upstreams[].name` | 上游名称，同时作为缓存命名空间 | - |
 | `upstreams[].hosts` | 可识别的主机别名（用于路径前缀 / Host 路由） | `[name]` |
 | `upstreams[].endpoint` | 上游 Registry 地址 | `https://<name>` |
@@ -128,6 +136,10 @@ DockerFast 会识别路径第一段中的主机名（`ghcr.io`、`gcr.io`、`reg
 | `DOCKERFAST_MAX_CACHE_BYTES` | `cache.maxSizeBytes` |
 | `DOCKERFAST_BLOB_TTL` | `cache.blobTTL` |
 | `DOCKERFAST_MANIFEST_TTL` | `cache.manifestTTL` |
+| `DOCKERFAST_RETRY_ATTEMPTS` | `retry.attempts` |
+| `DOCKERFAST_AUTH_ENABLED` | `auth.enabled` |
+| `DOCKERFAST_AUTH_USERNAME` | `auth.username` |
+| `DOCKERFAST_AUTH_PASSWORD` | `auth.password` |
 
 ### 使用国内镜像作为上游
 
@@ -161,9 +173,10 @@ DockerFast 会识别路径第一段中的主机名（`ghcr.io`、`gcr.io`、`reg
 | 端点 | 说明 |
 | --- | --- |
 | `GET /v2/` | Registry V2 版本探测，返回 `{}` |
-| `GET /healthz` | 健康检查，返回 `{"status":"ok"}` |
-| `GET /metrics` | Prometheus 指标（请求数、缓存命中/未命中、字节数、缓存容量、运行时间等） |
-| `GET /` | 服务信息 |
+| `GET /healthz` | 健康检查，返回 `{"status":"ok"}`（开启鉴权时仍保持开放） |
+| `GET /metrics` | Prometheus 指标（请求数、缓存命中/未命中、重试、字节数、缓存容量、运行时间等） |
+| `GET /status` | JSON 状态：版本、运行时长、缓存用量、上游列表与全部计数 |
+| `GET /` | 内置状态面板（无外部依赖的 HTML 页面，每 3 秒刷新） |
 
 ## 缓存目录结构
 
@@ -197,7 +210,8 @@ make docker  # 构建 Docker 镜像
 ```
 
 测试覆盖：配置加载与环境覆盖、摘要解析、缓存读写/TTL/LRU、路径解析、上游路由、
-认证挑战解析、Bearer token 协商，以及基于 `httptest` 的 manifest/blob 端到端缓存验证。
+认证挑战解析、Bearer token 协商、上游重试退避、代理 Basic 鉴权、并发下载去重，
+以及基于 `httptest` 的 manifest/blob 端到端缓存与缓存标识验证。
 
 ## 安全说明
 
@@ -205,6 +219,8 @@ make docker  # 构建 Docker 镜像
 - 缓存按内容摘要寻址，写入后校验 sha256，摘要不匹配的内容不会进入缓存
 - 引用路径做了防目录穿越处理
 - 私有仓库凭据仅保存在本地配置文件中，不会写入缓存
+- 如将代理暴露在不可信网络，建议开启 `auth`（HTTP Basic）以避免缓存被他人盗用
+- 上游仅在网络错误或 429/5xx 等瞬时故障时重试，且不会重试带不可重放请求体的调用
 
 ## License
 

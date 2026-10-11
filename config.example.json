@@ -12,6 +12,16 @@
     "manifestTTL": "24h",
     "cleanupInterval": "30m"
   },
+  "retry": {
+    "attempts": 3,
+    "initialBackoff": "200ms",
+    "maxBackoff": "2s"
+  },
+  "auth": {
+    "enabled": false,
+    "username": "",
+    "password": ""
+  },
   "upstreams": [
     {
       "name": "docker.io",

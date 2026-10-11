@@ -109,3 +109,34 @@ func TestValidateDuplicateUpstream(t *testing.T) {
 		t.Fatal("expected duplicate upstream error")
 	}
 }
+
+func TestAuthValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Auth = Auth{Enabled: true, Username: "admin"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when password missing")
+	}
+	cfg.Auth.Password = "secret"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("auth config should be valid: %v", err)
+	}
+}
+
+func TestRetryDefaultsAndNormalisation(t *testing.T) {
+	cfg := Default()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Retry.Attempts != 3 {
+		t.Fatalf("default attempts = %d, want 3", cfg.Retry.Attempts)
+	}
+	// Zero attempts must be coerced to 1.
+	cfg2 := Default()
+	cfg2.Retry.Attempts = 0
+	if err := cfg2.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Retry.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", cfg2.Retry.Attempts)
+	}
+}

@@ -29,6 +29,7 @@ func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request, rt *Rout
 	// Fast path: serve directly from cache (supports range requests).
 	if f, _, oerr := r.cache.OpenBlob(d); oerr == nil {
 		r.metrics.IncBlobHit()
+		setCacheStatus(w, cacheHit)
 		serveBlobFile(w, req, d, f)
 		return
 	}
@@ -76,6 +77,7 @@ func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request, rt *Rout
 		return
 	}
 	r.metrics.IncBlobHit()
+	setCacheStatus(w, cacheHit)
 	serveBlobFile(w, req, d, f)
 }
 
@@ -118,6 +120,7 @@ func (r *Registry) streamAndCache(req *http.Request, w http.ResponseWriter, up *
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", d.String())
 	w.Header().Set("Accept-Ranges", "bytes")
+	setCacheStatus(w, cacheMiss)
 	if resp.ContentLength >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}

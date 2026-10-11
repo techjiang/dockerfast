@@ -41,6 +41,7 @@ func (r *Registry) handleManifest(w http.ResponseWriter, req *http.Request, rt *
 		if d, err := cache.ParseDigest(digestStr); err == nil {
 			if data, media, ok := r.cache.GetManifest(d); ok {
 				r.metrics.IncManifestHit()
+				setCacheStatus(w, cacheHit)
 				writeManifest(w, req, d.String(), media, data)
 				return
 			}
@@ -55,6 +56,7 @@ func (r *Registry) handleManifest(w http.ResponseWriter, req *http.Request, rt *
 		return
 	}
 	r.metrics.IncManifestMiss()
+	setCacheStatus(w, cacheMiss)
 
 	if d, perr := cache.ParseDigest(digest); perr == nil {
 		if err := r.cache.PutManifest(d, media, data); err != nil {
